@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LeadFlow IA — Qualification Automatisée</title>
+
+  <!-- ============================================================
+       LEADFLOW IA — Interface principale
+       
+       Ce fichier appelle /api/claude (ton serveur proxy local)
+       qui lui-même appelle l'API Anthropic avec ta clé secrète.
+       
+       Flux complet :
+         1. Formulaire rempli → startQualification()
+         2. callClaudeQualification() → /api/claude → Claude API
+            Claude retourne un JSON de qualification (score, température, etc.)
+         3. sendEmailViaGmail() → /api/claude avec mcp_servers Gmail
+            Claude utilise son outil Gmail MCP pour envoyer l'email
+         4. Résultat affiché dans renderResultZone()
+  ============================================================ -->
+
+  <style>
+    /* ── Reset & base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    :root {
+      --bg: #ffffff;
+      --bg-2: #f8f7f4;
+      --bg-3: #f0efe9;
+      --text: #1a1a18;
+      --text-2: #6b6b66;
+      --text-3: #9e9e99;
+      --border: rgba(0,0,0,0.1);
+      --border-2: rgba(0,0,0,0.18);
+      --radius: 8px;
+      --radius-lg: 12px;
+      --success: #16a34a;
+      --success-bg: #f0fdf4;
+      --warning: #d97706;
+      --warning-bg: #fffbeb;
+      --danger: #dc2626;
+      --danger-bg: #fef2f2;
+      --info: #2563eb;
+      --info-bg: #eff6ff;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1a;
+        --bg-2: #242422;
+        --bg-3: #2c2c2a;
+        --text: #f0efe8;
+        --text-2: #a0a09a;
+        --text-3: #6a6a66;
+        --border: rgba(255,255,255,0.1);
+        --border-2: rgba(255,255,255,0.18);
+        --success: #4ade80;
+        --success-bg: #052e16;
+        --warning: #fbbf24;
+        --warning-bg: #1c1400;
+        --danger: #f87171;
+        --danger-bg: #1c0404;
+        --info: #60a5fa;
+        --info-bg: #0c1a3a;
+      }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg-3);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Layout principal ── */
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 100vh;
+      max-width: 1100px;
+      margin: 0 auto;
+      background: var(--bg);
+      border-left: 0.5px solid var(--border);
+      border-right: 0.5px solid var(--border);
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--bg-2);
+      border-right: 0.5px solid var(--border);
+      padding: 20px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+
+    .sidebar-logo {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 20px;
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sidebar-logo .dot {
+      width: 8px;
+      height: 8px;
+      background: #22c55e;
+      border-radius: 50%;
+    }
+
+    .sidebar-section {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      padding: 0 8px;
+      margin-top: 14px;
+      margin-bottom: 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-2);
+      transition: background 0.12s, color 0.12s;
+      user-select: none;
+    }
+
+    .nav-item:hover { background: var(--bg-3); color: var(--text); }
+
+    .nav-item.active {
+      background: var(--bg);
+      color: var(--text);
+      font-weight: 500;
+      border: 0.5px solid var(--border-2);
+    }
+
+    .nav-icon { width: 15px; height: 15px; flex-shrink: 0; opacity: 0.75; }
+    .nav-badge {
+      margin-left: auto;
+      background: var(--info-bg);
+      color: var(--info);
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+
+    /* ── Zone principale ── */
+    .main { display: flex; flex-direction: column; min-height: 100vh; }
+
+    .topbar {
+      padding: 14px 24px;
+      border-bottom: 0.5px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 10;
+    }
+
+    .topbar-title { font-size: 14px; font-weight: 500; }
+    .topbar-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+    .content { padding: 24px; flex: 1; }
+
+    /* ── Panels (onglets) ── */
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Formulaire ── */
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 14px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    .form-group.full { grid-column: 1 / -1; }
+
+    label { font-size: 12px; color: var(--text-2); font-weight: 500; }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 8px 11px;
+      border: 0.5px solid var(--border-2);
+      border-radius: var(--radius);
+      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      transition: border-color 0.15s;
+      outline: none;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--text-2);
+      box-shadow: 0 0 0 3px rgba(0,0,0,0.04);
+    }
+
+    textarea { resize: vertical; min-height: 80px; }
+
+    /* ── Boutons ── */
+    .btn {
+      padding: 8px 16px;
+      border: 0.5px solid var(--border-2);
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      transition: all 0.12s;
+    }
+    .btn:hover { background: var(--bg-2); }
+    .btn-primary {
+      background: var(--text);
+      color: var(--bg);
+      border-color: var(--text);
+    }
+    .btn-primary:hover { opacity: 0.82; }
+    .btn-primary:disabled { opacity: 0.38; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 8px; justify-content: flex-end; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--bg);
+      border: 0.5px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px 18px;
+      margin-bottom: 14px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .card-title { font-size: 14px; font-weight: 500; }
+    .card-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+    /* ── Pills de température ── */
+    .pill {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .pill-hot { background: var(--danger-bg); color: var(--danger); }
+    .pill-warm { background: var(--warning-bg); color: var(--warning); }
+    .pill-cold { background: var(--info-bg); color: var(--info); }
+
+    /* ── Score bar ── */
+    .score-bar {
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      margin: 10px 0;
+    }
+    .score-fill { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
+    .score-fill.high { background: #22c55e; }
+    .score-fill.mid  { background: #f59e0b; }
+    .score-fill.low  { background: #3b82f6; }
+
+    /* ── Stats cards ── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+    .stat-card {
+      background: var(--bg-2);
+      border-radius: var(--radius);
+      padding: 13px 15px;
+    }
+    .stat-val { font-size: 24px; font-weight: 500; color: var(--text); }
+    .stat-lbl { font-size: 11px; color: var(--text-3); margin-top: 3px; }
+
+    /* ── Étapes de traitement ── */
+    .progress-steps { display: flex; flex-direction: column; gap: 12px; margin: 18px 0; }
+    .step-row { display: flex; align-items: center; gap: 13px; }
+    .step-icon {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600; flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .step-icon.done    { background: var(--success-bg); color: var(--success); }
+    .step-icon.running { background: var(--bg-2); color: var(--text-2); }
+    .step-icon.pending { background: var(--bg-2); color: var(--text-3); opacity: 0.5; }
+    .step-text { font-size: 13px; color: var(--text); }
+    .step-sub  { font-size: 11px; color: var(--text-3); }
+
+    /* ── Spinner ── */
+    .loader {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid var(--border-2);
+      border-top-color: var(--text);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Fiche résultat ── */
+    .fiche-section { margin-bottom: 16px; }
+    .fiche-section-title {
+      font-size: 10px; font-weight: 600;
+      color: var(--text-3); text-transform: uppercase;
+      letter-spacing: 0.07em; margin-bottom: 8px;
+      border-bottom: 0.5px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .fiche-row {
+      display: flex; justify-content: space-between;
+      font-size: 13px; padding: 4px 0;
+    }
+    .fiche-key { color: var(--text-2); }
+    .fiche-val { color: var(--text); font-weight: 500; }
+
+    /* ── Email preview ── */
+    .email-preview {
+      border: 0.5px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .email-header {
+      background: var(--bg-2); padding: 10px 14px;
+      font-size: 12px; color: var(--text-2);
+      border-bottom: 0.5px solid var(--border);
+    }
+    .email-body {
+      padding: 16px; font-size: 13px;
+      color: var(--text); line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    /* ── Journal ── */
+    .log-entry {
+      display: flex; gap: 10px; font-size: 12px;
+      padding: 7px 0; border-bottom: 0.5px solid var(--border);
+    }
+    .log-time { color: var(--text-3); min-width: 48px; }
+    .log-step { color: var(--text-2); flex: 1; }
+
+    /* ── Messages d'état ── */
+    .error-msg {
+      background: var(--danger-bg); color: var(--danger);
+      padding: 10px 14px; border-radius: var(--radius);
+      font-size: 13px; margin-top: 10px;
+    }
+    .success-msg {
+      background: var(--success-bg); color: var(--success);
+      padding: 10px 14px; border-radius: var(--radius);
+      font-size: 13px; margin-top: 10px;
+    }
+
+    /* ── Points forts / attention ── */
+    .point-line { font-size: 12px; padding: 3px 0; }
+    .point-ok  { color: var(--success); }
+    .point-warn { color: var(--warning); }
+
+    /* ── Meta row ── */
+    .meta-row {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      font-size: 12px; color: var(--text-3);
+    }
+  </style>
+</head>
+
+<body>
+<div class="app">
+
+  <!-- ══════════════════ SIDEBAR ══════════════════ -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span class="dot"></span>
+      LeadFlow IA
+    </div>
+
+    <div class="sidebar-section">Agent</div>
+
+    <div class="nav-item active" data-panel="new-lead">
+      <!-- Icône + -->
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="8" cy="8" r="6"/><line x1="8" y1="5" x2="8" y2="11"/><line x1="5" y1="8" x2="11" y2="8"/>
+      </svg>
+      Nouveau lead
+    </div>
+
+    <div class="nav-item" data-panel="pipeline">
+      <!-- Icône liste -->
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="3" width="12" height="2" rx="1"/>
+        <rect x="2" y="7" width="9" height="2" rx="1"/>
+        <rect x="2" y="11" width="11" height="2" rx="1"/>
+      </svg>
+      Pipeline
+      <span class="nav-badge" id="badge-pipeline">0</span>
+    </div>
+
+    <div class="nav-item" data-panel="stats">
+      <!-- Icône courbe -->
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <polyline points="2,12 5,7 8,9 11,4 14,6"/>
+      </svg>
+      Statistiques
+    </div>
+
+    <div class="sidebar-section">Paramètres</div>
+
+    <div class="nav-item" data-panel="config">
+      <!-- Icône engrenage -->
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="8" cy="8" r="2.5"/>
+        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/>
+      </svg>
+      Configuration
+    </div>
+  </nav>
+
+  <!-- ══════════════════ ZONE PRINCIPALE ══════════════════ -->
+  <div class="main">
+
+    <div class="topbar">
+      <div>
+        <div class="topbar-title" id="topbar-title">Nouveau lead</div>
+        <div class="topbar-sub">Agent de qualification automatisée · Immobilier</div>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ────────────────────────────────
+           PANEL 1 : NOUVEAU LEAD
+           ──────────────────────────────── -->
+      <div class="panel active" id="panel-new-lead">
+        <div class="section-label">Informations investisseur</div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Prénom & Nom *</label>
+            <input type="text" id="f-nom" placeholder="ex. Jean Dupont" />
+          </div>
+          <div class="form-group">
+            <label>Email *</label>
+            <input type="email" id="f-email" placeholder="jean@exemple.fr" />
+          </div>
+          <div class="form-group">
+            <label>Téléphone</label>
+            <input type="text" id="f-tel" placeholder="+33 6 00 00 00 00" />
+          </div>
+          <div class="form-group">
+            <label>Budget d'investissement</label>
+            <select id="f-budget">
+              <option value="">— Sélectionner —</option>
+              <option value="Moins de 100 000 €">Moins de 100 000 €</option>
+              <option value="100 000 – 300 000 €">100 000 – 300 000 €</option>
+              <option value="300 000 – 600 000 €">300 000 – 600 000 €</option>
+              <option value="Plus de 600 000 €">Plus de 600 000 €</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Type de bien</label>
+            <select id="f-type">
+              <option value="">— Sélectionner —</option>
+              <option value="Appartement">Appartement</option>
+              <option value="Maison">Maison</option>
+              <option value="Immeuble de rapport">Immeuble de rapport</option>
+              <option value="Bureau / local commercial">Bureau / local commercial</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Zone géographique</label>
+            <input type="text" id="f-zone" placeholder="ex. Lyon, Bordeaux, Paris 13e…" />
+          </div>
+          <div class="form-group">
+            <label>Objectif</label>
+            <select id="f-objectif">
+              <option value="">— Sélectionner —</option>
+              <option value="Investissement locatif">Investissement locatif</option>
+              <option value="Achat-revente">Achat-revente</option>
+              <option value="Résidence principale">Résidence principale</option>
+              <option value="Constitution de patrimoine">Constitution de patrimoine</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Délai de décision</label>
+            <select id="f-delai">
+              <option value="">— Sélectionner —</option>
+              <option value="Moins d'un mois (urgent)">Moins d'un mois (urgent)</option>
+              <option value="1 à 3 mois">1 à 3 mois</option>
+              <option value="3 à 6 mois">3 à 6 mois</option>
+              <option value="Plus de 6 mois">Plus de 6 mois</option>
+            </select>
+          </div>
+          <div class="form-group full">
+            <label>Message libre</label>
+            <textarea id="f-message" placeholder="Décrivez votre projet en quelques mots…"></textarea>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn" onclick="resetForm()">Réinitialiser</button>
+          <button class="btn btn-primary" id="btn-qualify" onclick="startQualification()">
+            Qualifier ce lead →
+          </button>
+        </div>
+
+        <!-- Zone de traitement (apparaît après soumission) -->
+        <div id="processing-zone" style="display:none; margin-top:28px;">
+          <div class="section-label">Traitement en cours</div>
+          <div id="steps-container"></div>
+          <div id="result-zone" style="display:none;"></div>
+        </div>
+      </div>
+
+      <!-- ────────────────────────────────
+           PANEL 2 : PIPELINE
+           ──────────────────────────────── -->
+      <div class="panel" id="panel-pipeline">
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-val" id="stat-total">0</div>
+            <div class="stat-lbl">Leads total</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-val" id="stat-hot">0</div>
+            <div class="stat-lbl">Chauds 🔥</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-val" id="stat-warm">0</div>
+            <div class="stat-lbl">Tièdes ☀️</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-val" id="stat-cold">0</div>
+            <div class="stat-lbl">Froids ❄️</div>
+          </div>
+        </div>
+
+        <div class="section-label">Leads qualifiés</div>
+        <div id="leads-list">
+          <div style="font-size:13px; color:var(--text-3); padding:20px 0;">
+            Aucun lead qualifié pour l'instant.
+          </div>
+        </div>
+      </div>
+
+      <!-- ────────────────────────────────
+           PANEL 3 : STATISTIQUES
+           ──────────────────────────────── -->
+      <div class="panel" id="panel-stats">
+        <div class="section-label">Vue d'ensemble</div>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-val" id="st-qualif">0</div><div class="stat-lbl">Qualifiés</div></div>
+          <div class="stat-card"><div class="stat-val" id="st-emails">0</div><div class="stat-lbl">Emails envoyés</div></div>
+          <div class="stat-card"><div class="stat-val" id="st-score">—</div><div class="stat-lbl">Score moyen</div></div>
+          <div class="stat-card"><div class="stat-val" id="st-hot-rate">—</div><div class="stat-lbl">Taux leads chauds</div></div>
+        </div>
+
+        <div class="card">
+          <div class="fiche-section-title">Journal d'activité</div>
+          <div id="activity-log">
+            <div style="font-size:13px; color:var(--text-3); padding:8px 0;">Aucune activité enregistrée.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ────────────────────────────────
+           PANEL 4 : CONFIGURATION
+           ──────────────────────────────── -->
+      <div class="panel" id="panel-config">
+        <div class="section-label">Configuration de l'agent</div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Gmail MCP</div>
+              <div class="card-sub">Envoi automatique des emails de suivi</div>
+            </div>
+            <span class="pill pill-hot">Connecté</span>
+          </div>
+          <div class="form-group">
+            <label>Email expéditeur (affiché dans les emails)</label>
+            <input type="email" id="cfg-sender" placeholder="votre@agence.fr" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px;">Personnalisation</div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Nom de l'agence</label>
+            <input type="text" id="cfg-agency" placeholder="Immo Invest Pro" />
+          </div>
+          <div class="form-group">
+            <label>Signature email</label>
+            <textarea id="cfg-signature" style="min-height:70px;">Cordialement,
+L'équipe LeadFlow IA</textarea>
+          </div>
+        </div>
+
+        <div class="card" style="background:var(--bg-2);">
+          <div class="card-title" style="margin-bottom:8px; font-size:13px;">Comment connecter Gmail ?</div>
+          <ol style="font-size:12px; color:var(--text-2); line-height:2; padding-left:18px;">
+            <li>Connecte ton compte Gmail sur <strong>claude.ai</strong> dans Outils → Gmail</li>
+            <li>Le serveur proxy (server.js) inclut automatiquement le MCP Gmail dans les requêtes</li>
+            <li>Claude utilisera le MCP pour envoyer les emails sans intervention humaine</li>
+          </ol>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+
+<script>
+// ============================================================
+// LEADFLOW IA — Logique JavaScript
+// ============================================================
+
+// ── État global ──
+const leadsDB      = [];   // stocke tous les leads qualifiés
+const activityLog  = [];   // journal d'activité
+let   emailsCount  = 0;    // compteur emails envoyés
+
+// ──────────────────────────────────────────────────────────
+// NAVIGATION — gestion des onglets
+// ──────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const panel = item.dataset.panel;
+
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+
+    item.classList.add('active');
+    document.getElementById('panel-' + panel).classList.add('active');
+
+    // Met à jour le titre de la topbar
+    const titles = {
+      'new-lead'  : 'Nouveau lead',
+      'pipeline'  : 'Pipeline',
+      'stats'     : 'Statistiques',
+      'config'    : 'Configuration'
+    };
+    document.getElementById('topbar-title').textContent = titles[panel] || '';
+
+    // Rafraîchit les vues dynamiques
+    if (panel === 'pipeline') renderPipeline();
+    if (panel === 'stats')    renderStats();
+  });
+});
+
+// ──────────────────────────────────────────────────────────
+// HELPERS
+// ──────────────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function getAgency()    { return document.getElementById('cfg-agency').value.trim()    || 'LeadFlow Immo'; }
+function getSignature() { return document.getElementById('cfg-signature').value.trim() || 'Cordialement,\nL\'équipe LeadFlow IA'; }
+
+function getFormData() {
+  return {
+    nom      : document.getElementById('f-nom').value.trim(),
+    email    : document.getElementById('f-email').value.trim(),
+    tel      : document.getElementById('f-tel').value.trim(),
+    budget   : document.getElementById('f-budget').value,
+    type     : document.getElementById('f-type').value,
+    zone     : document.getElementById('f-zone').value.trim(),
+    objectif : document.getElementById('f-objectif').value,
+    delai    : document.getElementById('f-delai').value,
+    message  : document.getElementById('f-message').value.trim()
+  };
+}
+
+function resetForm() {
+  ['f-nom','f-email','f-tel','f-budget','f-type','f-zone','f-objectif','f-delai','f-message']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('processing-zone').style.display = 'none';
+}
+
+// ──────────────────────────────────────────────────────────
+// GESTION DES ÉTAPES DE TRAITEMENT
+// ──────────────────────────────────────────────────────────
+function setStep(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'step-icon ' + state;
+  if (state === 'done')    el.innerHTML = '✓';
+  else if (state === 'running') el.innerHTML = '<span class="loader"></span>';
+  else el.innerHTML = '·';
+  return sleep(300);
+}
+
+function showError(msg) {
+  const rz = document.getElementById('result-zone');
+  rz.innerHTML = `<div class="error-msg">⚠ ${msg}</div>`;
+  rz.style.display = 'block';
+}
+
+// ──────────────────────────────────────────────────────────
+// QUALIFICATION — ORCHESTRATION PRINCIPALE
+// ──────────────────────────────────────────────────────────
+async function startQualification() {
+  const d = getFormData();
+
+  // Validation minimale
+  if (!d.nom || !d.email) {
+    alert('Veuillez renseigner au minimum le nom et l\'email.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-qualify');
+  btn.disabled = true;
+
+  const pz = document.getElementById('processing-zone');
+  pz.style.display = 'block';
+  document.getElementById('result-zone').style.display = 'none';
+
+  // Définition des 4 étapes visibles
+  const steps = [
+    { id: 's1', label: 'Réception de la demande',    sub: 'Validation et parsing des données' },
+    { id: 's2', label: 'Qualification IA',           sub: 'Analyse du profil par Claude' },
+    { id: 's3', label: 'Génération de la fiche',     sub: 'Création du rapport personnalisé' },
+    { id: 's4', label: 'Envoi email automatique',    sub: 'Gmail MCP · email de suivi lead' }
+  ];
+
+  // Affiche les étapes
+  document.getElementById('steps-container').innerHTML =
+    '<div class="progress-steps">' +
+    steps.map(s => `
+      <div class="step-row">
+        <div class="step-icon pending" id="${s.id}">·</div>
+        <div>
+          <div class="step-text">${s.label}</div>
+          <div class="step-sub">${s.sub}</div>
+        </div>
+      </div>`).join('') +
+    '</div>';
+
+  // ── Étape 1 : validation ──
+  await setStep('s1', 'running');
+  await sleep(500);
+  await setStep('s1', 'done');
+
+  // ── Étape 2 : qualification Claude ──
+  await setStep('s2', 'running');
+  let qualification;
+  try {
+    qualification = await callClaudeQualification(d);
+  } catch(e) {
+    await setStep('s2', 'pending');
+    showError('Erreur lors de la qualification IA : ' + e.message);
+    btn.disabled = false;
+    return;
+  }
+  await setStep('s2', 'done');
+
+  // ── Étape 3 : génération fiche ──
+  await setStep('s3', 'running');
+  await sleep(400);
+  await setStep('s3', 'done');
+
+  // ── Étape 4 : envoi email via Gmail MCP ──
+  await setStep('s4', 'running');
+  let emailResult;
+  try {
+    emailResult = await sendEmailViaGmail(d, qualification);
+  } catch(e) {
+    // L'email a échoué mais on continue — on affiche quand même la fiche
+    emailResult = { sent: false, preview: buildEmailBody(d, qualification), error: e.message };
+  }
+  await setStep('s4', 'done');
+
+  // ── Sauvegarde et affichage ──
+  const lead = {
+    id    : Date.now(),
+    data  : d,
+    qual  : qualification,
+    email : emailResult,
+    ts    : new Date()
+  };
+
+  leadsDB.push(lead);
+  if (emailResult.sent) emailsCount++;
+  addActivity(d.nom, qualification.scoring, emailResult.sent);
+  updateBadge();
+
+  renderResultZone(lead);
+  btn.disabled = false;
+}
+
+// ──────────────────────────────────────────────────────────
+// APPEL CLAUDE — QUALIFICATION DU LEAD
+// Appelle /api/claude (proxy serveur) qui transmet à l'API Anthropic
+// ──────────────────────────────────────────────────────────
+async function callClaudeQualification(d) {
+  const prompt = `Tu es un expert en qualification de leads immobiliers. Analyse ce profil investisseur.
+Retourne UNIQUEMENT un objet JSON valide, sans markdown, sans backticks, sans explication.
+
+Profil :
+- Nom : ${d.nom}
+- Budget : ${d.budget || 'non précisé'}
+- Type de bien : ${d.type || 'non précisé'}
+- Zone géographique : ${d.zone || 'non précisée'}
+- Objectif : ${d.objectif || 'non précisé'}
+- Délai de décision : ${d.delai || 'non précisé'}
+- Message libre : ${d.message || 'aucun'}
+
+Retourne exactement ce JSON (tous les champs requis) :
+{
+  "scoring": <entier entre 0 et 100>,
+  "temperature": "<hot|warm|cold>",
+  "profil_type": "<type d'investisseur en 5 mots max>",
+  "points_forts": ["<point 1>", "<point 2>", "<point 3 max>"],
+  "points_attention": ["<point 1>", "<point 2 max>"],
+  "recommandation": "<action recommandée pour le conseiller, 20 mots max>",
+  "resume": "<résumé du profil en 2 phrases max, utilisé dans l'email>"
+}`;
+
+  const res = await fetch('/api/claude', {
+    method  : 'POST',
+    headers : { 'Content-Type': 'application/json' },
+    body    : JSON.stringify({
+      model      : 'claude-sonnet-4-20250514',
+      max_tokens : 1000,
+      messages   : [{ role: 'user', content: prompt }]
+    })
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+
+  const text = data.content
+    .map(b => b.text || '')
+    .join('')
+    .replace(/```json|```/g, '')
+    .trim();
+
+  return JSON.parse(text);
+}
+
+// ──────────────────────────────────────────────────────────
+// ENVOI EMAIL — GMAIL MCP
+// Claude utilise son outil Gmail MCP pour envoyer l'email
+// Le MCP est passé dans mcp_servers dans le body de la requête
+// ──────────────────────────────────────────────────────────
+async function sendEmailViaGmail(d, q) {
+  const emailBody = buildEmailBody(d, q);
+  const subject   = `Votre projet immobilier · ${getAgency()}`;
+
+  const res = await fetch('/api/claude', {
+    method  : 'POST',
+    headers : { 'Content-Type': 'application/json' },
+    body    : JSON.stringify({
+      model      : 'claude-sonnet-4-20250514',
+      max_tokens : 1000,
+      // ── Le MCP Gmail est injecté ici ──
+      mcp_servers: [
+        {
+          type : 'url',
+          url  : 'https://gmail.mcp.claude.com/mcp',
+          name : 'gmail'
+        }
+      ],
+      messages: [
+        {
+          role    : 'user',
+          content : `Envoie un email à ${d.email} avec :
+- Sujet : "${subject}"
+- Corps :
+
+${emailBody}`
+        }
+      ]
+    })
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+
+  // Vérifie si un tool_result MCP confirme l'envoi
+  const toolResults = data.content.filter(b => b.type === 'mcp_tool_result');
+  const textBlocks  = data.content.filter(b => b.type === 'text').map(b => b.text).join(' ');
+  const sent = toolResults.length > 0 ||
+               textBlocks.toLowerCase().includes('envoy') ||
+               textBlocks.toLowerCase().includes('sent')  ||
+               textBlocks.toLowerCase().includes('success');
+
+  return { sent, preview: emailBody };
+}
+
+// ──────────────────────────────────────────────────────────
+// CONSTRUCTION DU CORPS DE L'EMAIL
+// ──────────────────────────────────────────────────────────
+function buildEmailBody(d, q) {
+  const agency = getAgency();
+  const sig    = getSignature();
+  const prenom = d.nom.split(' ')[0];
+
+  return `Bonjour ${prenom},
+
+Merci pour votre demande concernant votre projet d'investissement immobilier.
+
+Nous avons bien pris en compte votre recherche${d.type ? ' (' + d.type + ')' : ''}${d.zone ? ' sur la zone ' + d.zone : ''}${d.budget ? ' avec un budget de ' + d.budget : ''}.
+
+${q.resume}
+
+Un conseiller ${agency} va vous contacter très prochainement pour échanger avec vous sur votre projet et vous présenter les opportunités correspondant à vos critères.
+
+${sig}`;
+}
+
+// ──────────────────────────────────────────────────────────
+// RENDU DU RÉSULTAT
+// ──────────────────────────────────────────────────────────
+function renderResultZone(lead) {
+  const rz  = document.getElementById('result-zone');
+  const q   = lead.qual;
+  const d   = lead.data;
+
+  const scoreClass = q.scoring >= 70 ? 'high' : q.scoring >= 40 ? 'mid' : 'low';
+  const tempLabel  = { hot: '🔥 Lead chaud', warm: '☀️ Lead tiède', cold: '❄️ Lead froid' }[q.temperature] || q.temperature;
+  const tempPill   = { hot: 'pill-hot',      warm: 'pill-warm',     cold: 'pill-cold'      }[q.temperature] || '';
+
+  rz.innerHTML = `
+  <div class="section-label" style="margin-top:24px;">Résultat de qualification</div>
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">${d.nom}</div>
+        <div class="card-sub">${d.email}${d.tel ? ' · ' + d.tel : ''}</div>
+      </div>
+      <span class="pill ${tempPill}">${tempLabel}</span>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:14px; margin-bottom:16px;">
+      <div>
+        <div style="font-size:28px; font-weight:500; line-height:1;">${q.scoring}</div>
+        <div style="font-size:11px; color:var(--text-3);">/ 100</div>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:12px; color:var(--text-2); margin-bottom:5px;">${q.profil_type}</div>
+        <div class="score-bar"><div class="score-fill ${scoreClass}" style="width:${q.scoring}%;"></div></div>
+      </div>
+    </div>
+
+    <div class="fiche-section">
+      <div class="fiche-section-title">Résumé du profil</div>
+      <div style="font-size:13px; color:var(--text-2); line-height:1.7;">${q.resume}</div>
+    </div>
+
+    ${q.points_forts && q.points_forts.length ? `
+    <div class="fiche-section">
+      <div class="fiche-section-title">Points forts</div>
+      ${q.points_forts.map(p => `<div class="point-line point-ok">✓ ${p}</div>`).join('')}
+    </div>` : ''}
+
+    ${q.points_attention && q.points_attention.length ? `
+    <div class="fiche-section">
+      <div class="fiche-section-title">Points d'attention</div>
+      ${q.points_attention.map(p => `<div class="point-line point-warn">⚠ ${p}</div>`).join('')}
+    </div>` : ''}
+
+    <div class="fiche-section">
+      <div class="fiche-section-title">Recommandation conseiller</div>
+      <div style="font-size:13px; font-weight:500; color:var(--text);">${q.recommandation}</div>
+    </div>
+
+    <div class="fiche-section-title" style="margin-top:18px;">
+      Email de suivi
+      ${lead.email.sent
+        ? '<span style="color:var(--success); font-weight:500;"> · Envoyé ✓</span>'
+        : '<span style="color:var(--warning);"> · Aperçu (Gmail non connecté)</span>'}
+    </div>
+    <div class="email-preview">
+      <div class="email-header">
+        À : ${d.email} &nbsp;·&nbsp; Objet : Votre projet immobilier · ${getAgency()}
+      </div>
+      <div class="email-body">${lead.email.preview}</div>
+    </div>
+    ${lead.email.error ? `<div class="error-msg">Email non envoyé : ${lead.email.error}</div>` : ''}
+  </div>`;
+
+  rz.style.display = 'block';
+}
+
+// ──────────────────────────────────────────────────────────
+// RENDU PIPELINE
+// ──────────────────────────────────────────────────────────
+function renderPipeline() {
+  const hot  = leadsDB.filter(l => l.qual.temperature === 'hot');
+  const warm = leadsDB.filter(l => l.qual.temperature === 'warm');
+  const cold = leadsDB.filter(l => l.qual.temperature === 'cold');
+
+  document.getElementById('stat-total').textContent = leadsDB.length;
+  document.getElementById('stat-hot').textContent   = hot.length;
+  document.getElementById('stat-warm').textContent  = warm.length;
+  document.getElementById('stat-cold').textContent  = cold.length;
+
+  const ll = document.getElementById('leads-list');
+  if (!leadsDB.length) {
+    ll.innerHTML = '<div style="font-size:13px; color:var(--text-3); padding:20px 0;">Aucun lead qualifié pour l\'instant.</div>';
+    return;
+  }
+
+  ll.innerHTML = leadsDB.slice().reverse().map(l => {
+    const tp  = { hot:'pill-hot', warm:'pill-warm', cold:'pill-cold' }[l.qual.temperature] || '';
+    const sc  = l.qual.scoring >= 70 ? 'high' : l.qual.scoring >= 40 ? 'mid' : 'low';
+    const tl  = { hot:'🔥 Chaud', warm:'☀️ Tiède', cold:'❄️ Froid' }[l.qual.temperature] || '';
+    return `<div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">${l.data.nom}</div>
+          <div class="card-sub">${l.data.email} · ${l.qual.profil_type}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:13px; font-weight:500;">${l.qual.scoring}/100</span>
+          <span class="pill ${tp}">${tl}</span>
+        </div>
+      </div>
+      <div class="score-bar"><div class="score-fill ${sc}" style="width:${l.qual.scoring}%;"></div></div>
+      <div class="meta-row" style="margin-top:8px;">
+        ${l.data.budget ? '<span>' + l.data.budget + '</span>' : ''}
+        ${l.data.type   ? '<span>·</span><span>' + l.data.type   + '</span>' : ''}
+        ${l.data.zone   ? '<span>·</span><span>' + l.data.zone   + '</span>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ──────────────────────────────────────────────────────────
+// RENDU STATISTIQUES
+// ──────────────────────────────────────────────────────────
+function renderStats() {
+  const scores = leadsDB.map(l => l.qual.scoring);
+  const avg    = scores.length
+    ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+    : null;
+  const hot    = leadsDB.filter(l => l.qual.temperature === 'hot').length;
+
+  document.getElementById('st-qualif').textContent   = leadsDB.length;
+  document.getElementById('st-emails').textContent   = emailsCount;
+  document.getElementById('st-score').textContent    = avg !== null ? avg + '/100' : '—';
+  document.getElementById('st-hot-rate').textContent = leadsDB.length
+    ? Math.round(hot / leadsDB.length * 100) + '%'
+    : '—';
+
+  const al = document.getElementById('activity-log');
+  if (!activityLog.length) {
+    al.innerHTML = '<div style="font-size:13px; color:var(--text-3); padding:8px 0;">Aucune activité enregistrée.</div>';
+    return;
+  }
+
+  al.innerHTML = activityLog.slice().reverse().map(a =>
+    `<div class="log-entry">
+      <span class="log-time">${a.time}</span>
+      <span class="log-step">${a.text}</span>
+      <span style="font-size:12px; color:var(--text-3);">${a.email ? '✉ envoyé' : ''}</span>
+    </div>`
+  ).join('');
+}
+
+// ──────────────────────────────────────────────────────────
+// UTILITAIRES
+// ──────────────────────────────────────────────────────────
+function addActivity(nom, score, emailSent) {
+  const time = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  activityLog.push({ time, text: `${nom} qualifié · score ${score}/100`, email: emailSent });
+}
+
+function updateBadge() {
+  document.getElementById('badge-pipeline').textContent = leadsDB.length;
+}
+</script>
+
+</body>
+</html>
